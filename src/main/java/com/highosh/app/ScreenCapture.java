@@ -1,4 +1,4 @@
-package com.highosh.app;
+package com.granolaa.app;
 
 import javax.imageio.ImageIO;
 import java.awt.*;

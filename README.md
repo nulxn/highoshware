@@ -25,9 +25,9 @@ mvn clean package
 Run the JAR:
 
 ```bash
-java -jar target/highoshware-1.0-SNAPSHOT.jar
+java -jar target/granolaa-1.0-SNAPSHOT.jar
 # or with port:
-java -Dport=9090 -jar target/highoshware-1.0-SNAPSHOT.jar
+java -Dport=9090 -jar target/granolaa-1.0-SNAPSHOT.jar
 ```
 
 ## URLs

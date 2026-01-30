@@ -1,4 +1,4 @@
-package com.highosh.app;
+package com.granolaa.app;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -32,7 +32,7 @@ public class App {
             StreamServer streamServer = new StreamServer(port, screenCapture, webcamCapture);
             streamServer.start();
 
-            System.out.println("HighoshWare – teacher view streaming");
+            System.out.println("Granolaa – teacher view streaming");
             System.out.println();
             System.out.println("  Local:   http://localhost:" + port + "/");
             System.out.println("  Screen:  http://localhost:" + port + "/screen");

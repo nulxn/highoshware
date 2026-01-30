@@ -1,4 +1,4 @@
-package com.highosh.app;
+package com.granolaa.app;
 
 import junit.framework.Test;
 import junit.framework.TestCase;

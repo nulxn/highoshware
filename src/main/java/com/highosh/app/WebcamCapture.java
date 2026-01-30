@@ -1,4 +1,4 @@
-package com.highosh.app;
+package com.granolaa.app;
 
 import com.github.sarxos.webcam.Webcam;
 import com.github.sarxos.webcam.WebcamResolution;
