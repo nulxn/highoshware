@@ -1,4 +1,4 @@
-package com.highosh.app;
+package com.granolaa.app;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -50,9 +50,9 @@ public class StreamServer {
         String html = """
             <!DOCTYPE html>
             <html>
-            <head><meta charset="UTF-8"><title>HighoshWare Streams</title></head>
+            <head><meta charset="UTF-8"><title>Granolaa Streams</title></head>
             <body>
-            <h1>HighoshWare – Teacher view</h1>
+            <h1>Granolaa – Teacher view</h1>
             <p><a href="/screen">Screen stream</a></p>
             <p><a href="/webcam">Webcam stream</a></p>
             </body>
