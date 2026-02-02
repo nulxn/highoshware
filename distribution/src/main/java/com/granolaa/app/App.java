@@ -18,11 +18,6 @@ public class App {
         ScreenCapture screenCapture = new ScreenCapture();
         WebcamCapture webcamCapture = new WebcamCapture();
 
-        if (ScreenCapture.isWayland()) {
-            System.out.println("Screen capture is not supported on Wayland (supported on macOS and Windows). Only webcam will be available.");
-            System.out.println();
-        }
-
         Thread screenThread = new Thread(screenCapture, "screen-capture");
         Thread webcamThread = new Thread(webcamCapture, "webcam-capture");
         screenThread.setDaemon(true);

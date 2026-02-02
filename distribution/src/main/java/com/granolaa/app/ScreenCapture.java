@@ -57,8 +57,7 @@ public class ScreenCapture implements Runnable {
     @Override
     public void run() {
         if (isWayland()) {
-            System.err.println("Screen capture is not supported on Wayland (supported on macOS and Windows). Only webcam will be available.");
-            return;
+            return; // Screen capture not supported on Wayland; only webcam will stream
         }
         try {
             Robot robot = new Robot();

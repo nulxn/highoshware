@@ -13,9 +13,11 @@ app.use(express.static(path.join(__dirname, 'public')));
 const activeStreams = new Map();
 
 // WebSocket server for receiving streams from clients
+// perMessageDeflate: false — Java client doesn't support compression (RSV1); avoids InvalidFrameException
 const wss = new WebSocket.Server({ 
     server,
-    path: '/stream'
+    path: '/stream',
+    perMessageDeflate: false
 });
 
 wss.on('connection', (ws, req) => {
@@ -67,7 +69,8 @@ wss.on('connection', (ws, req) => {
 // WebSocket server for viewing clients (browsers)
 const viewWss = new WebSocket.Server({ 
     server,
-    path: '/view'
+    path: '/view',
+    perMessageDeflate: false
 });
 
 const viewingClients = new Set();

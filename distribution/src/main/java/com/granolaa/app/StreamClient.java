@@ -1,28 +1,34 @@
 package com.granolaa.app;
 
-import org.java_websocket.client.WebSocketClient;
-import org.java_websocket.handshake.ServerHandshake;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.WebSocket;
+import okhttp3.WebSocketListener;
+import okio.ByteString;
 
-import java.net.URI;
-import java.nio.ByteBuffer;
-import java.util.Base64;
+import java.io.IOException;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * WebSocket client that sends screen and webcam frames to a remote server.
+ * Uses OkHttp WebSocket (no permessage-deflate) to avoid RSV1/compression errors.
  * Each stream is identified by a unique client ID and stream type.
  */
 public class StreamClient {
 
     private final String serverUrl;
     private final String clientId;
-    private WebSocketClient screenClient;
-    private WebSocketClient webcamClient;
     private final ScreenCapture screenCapture;
     private final WebcamCapture webcamCapture;
-    private final AtomicBoolean screenConnected = new AtomicBoolean(false);
-    private final AtomicBoolean webcamConnected = new AtomicBoolean(false);
+    private final OkHttpClient okHttpClient;
+
+    private final AtomicReference<WebSocket> screenWebSocket = new AtomicReference<>();
+    private final AtomicReference<WebSocket> webcamWebSocket = new AtomicReference<>();
+    private volatile boolean screenConnected;
+    private volatile boolean webcamConnected;
     private Thread screenSenderThread;
     private Thread webcamSenderThread;
 
@@ -31,6 +37,11 @@ public class StreamClient {
         this.clientId = UUID.randomUUID().toString();
         this.screenCapture = screenCapture;
         this.webcamCapture = webcamCapture;
+        this.okHttpClient = new OkHttpClient.Builder()
+                .readTimeout(0, TimeUnit.MILLISECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .pingInterval(30, TimeUnit.SECONDS)
+                .build();
     }
 
     public void start() {
@@ -47,122 +58,136 @@ public class StreamClient {
         if (webcamSenderThread != null) {
             webcamSenderThread.interrupt();
         }
-        if (screenClient != null) {
-            screenClient.close();
+        WebSocket sw = screenWebSocket.getAndSet(null);
+        if (sw != null) {
+            sw.close(1000, "Client shutdown");
         }
-        if (webcamClient != null) {
-            webcamClient.close();
+        WebSocket ww = webcamWebSocket.getAndSet(null);
+        if (ww != null) {
+            ww.close(1000, "Client shutdown");
         }
     }
 
     private void startScreenStream() {
-        try {
-            URI screenUri = new URI(serverUrl + "/stream?type=screen&clientId=" + clientId);
-            screenClient = new WebSocketClient(screenUri) {
-                @Override
-                public void onOpen(ServerHandshake handshake) {
-                    screenConnected.set(true);
-                    System.out.println("Screen stream connected to server");
-                }
+        String url = serverUrl + "/stream?type=screen&clientId=" + clientId;
+        Request request = new Request.Builder().url(url).build();
+        okHttpClient.newWebSocket(request, new WebSocketListener() {
+            @Override
+            public void onOpen(WebSocket webSocket, Response response) {
+                screenWebSocket.set(webSocket);
+                screenConnected = true;
+                System.out.println("Screen stream connected to server");
+            }
 
-                @Override
-                public void onMessage(String message) {
-                    // Server can send control messages if needed
-                }
+            @Override
+            public void onMessage(WebSocket webSocket, String text) { }
 
-                @Override
-                public void onClose(int code, String reason, boolean remote) {
-                    screenConnected.set(false);
-                    System.out.println("Screen stream disconnected: " + reason);
-                }
+            @Override
+            public void onMessage(WebSocket webSocket, ByteString bytes) { }
 
-                @Override
-                public void onError(Exception ex) {
-                    System.err.println("Screen stream error: " + ex.getMessage());
-                    screenConnected.set(false);
-                }
-            };
-            screenClient.connect();
+            @Override
+            public void onClosing(WebSocket webSocket, int code, String reason) {
+                screenConnected = false;
+                screenWebSocket.set(null);
+            }
 
-            screenSenderThread = new Thread(() -> {
-                while (!Thread.currentThread().isInterrupted()) {
-                    try {
-                        if (screenConnected.get() && screenClient.isOpen()) {
-                            byte[] frame = screenCapture.getLatestFrame();
-                            if (frame != null && frame.length > 0) {
-                                // Send frame as binary data
-                                screenClient.send(frame);
-                            }
+            @Override
+            public void onClosed(WebSocket webSocket, int code, String reason) {
+                screenConnected = false;
+                screenWebSocket.set(null);
+                System.out.println("Screen stream disconnected: " + reason);
+            }
+
+            @Override
+            public void onFailure(WebSocket webSocket, Throwable t, Response response) {
+                screenConnected = false;
+                screenWebSocket.set(null);
+                System.err.println("Screen stream error: " + (t != null ? t.getMessage() : "unknown"));
+            }
+        });
+
+        screenSenderThread = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    WebSocket ws = screenWebSocket.get();
+                    if (screenConnected && ws != null) {
+                        byte[] frame = screenCapture.getLatestFrame();
+                        if (frame != null && frame.length > 0) {
+                            ws.send(ByteString.of(frame));
                         }
-                        Thread.sleep(100); // ~10 FPS
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    } catch (Exception e) {
-                        System.err.println("Error sending screen frame: " + e.getMessage());
                     }
+                    Thread.sleep(100); // ~10 FPS
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception e) {
+                    System.err.println("Error sending screen frame: " + e.getMessage());
                 }
-            }, "screen-sender");
-            screenSenderThread.setDaemon(true);
-            screenSenderThread.start();
-        } catch (Exception e) {
-            System.err.println("Failed to start screen stream: " + e.getMessage());
-        }
+            }
+        }, "screen-sender");
+        screenSenderThread.setDaemon(true);
+        screenSenderThread.start();
     }
 
     private void startWebcamStream() {
-        try {
-            URI webcamUri = new URI(serverUrl + "/stream?type=webcam&clientId=" + clientId);
-            webcamClient = new WebSocketClient(webcamUri) {
-                @Override
-                public void onOpen(ServerHandshake handshake) {
-                    webcamConnected.set(true);
-                    System.out.println("Webcam stream connected to server");
-                }
+        String url = serverUrl + "/stream?type=webcam&clientId=" + clientId;
+        Request request = new Request.Builder().url(url).build();
+        okHttpClient.newWebSocket(request, new WebSocketListener() {
+            @Override
+            public void onOpen(WebSocket webSocket, Response response) {
+                webcamWebSocket.set(webSocket);
+                webcamConnected = true;
+                System.out.println("Webcam stream connected to server");
+            }
 
-                @Override
-                public void onMessage(String message) {
-                    // Server can send control messages if needed
-                }
+            @Override
+            public void onMessage(WebSocket webSocket, String text) { }
 
-                @Override
-                public void onClose(int code, String reason, boolean remote) {
-                    webcamConnected.set(false);
-                    System.out.println("Webcam stream disconnected: " + reason);
-                }
+            @Override
+            public void onMessage(WebSocket webSocket, ByteString bytes) { }
 
-                @Override
-                public void onError(Exception ex) {
-                    System.err.println("Webcam stream error: " + ex.getMessage());
-                    webcamConnected.set(false);
-                }
-            };
-            webcamClient.connect();
+            @Override
+            public void onClosing(WebSocket webSocket, int code, String reason) {
+                webcamConnected = false;
+                webcamWebSocket.set(null);
+            }
 
-            webcamSenderThread = new Thread(() -> {
-                while (!Thread.currentThread().isInterrupted()) {
-                    try {
-                        if (webcamConnected.get() && webcamClient.isOpen()) {
-                            byte[] frame = webcamCapture.getLatestFrame();
-                            if (frame != null && frame.length > 0) {
-                                // Send frame as binary data
-                                webcamClient.send(frame);
-                            }
+            @Override
+            public void onClosed(WebSocket webSocket, int code, String reason) {
+                webcamConnected = false;
+                webcamWebSocket.set(null);
+                System.out.println("Webcam stream disconnected: " + reason);
+            }
+
+            @Override
+            public void onFailure(WebSocket webSocket, Throwable t, Response response) {
+                webcamConnected = false;
+                webcamWebSocket.set(null);
+                System.err.println("Webcam stream error: " + (t != null ? t.getMessage() : "unknown"));
+            }
+        });
+
+        webcamSenderThread = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    WebSocket ws = webcamWebSocket.get();
+                    if (webcamConnected && ws != null) {
+                        byte[] frame = webcamCapture.getLatestFrame();
+                        if (frame != null && frame.length > 0) {
+                            ws.send(ByteString.of(frame));
                         }
-                        Thread.sleep(100); // ~10 FPS
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    } catch (Exception e) {
-                        System.err.println("Error sending webcam frame: " + e.getMessage());
                     }
+                    Thread.sleep(100); // ~10 FPS
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception e) {
+                    System.err.println("Error sending webcam frame: " + e.getMessage());
                 }
-            }, "webcam-sender");
-            webcamSenderThread.setDaemon(true);
-            webcamSenderThread.start();
-        } catch (Exception e) {
-            System.err.println("Failed to start webcam stream: " + e.getMessage());
-        }
+            }
+        }, "webcam-sender");
+        webcamSenderThread.setDaemon(true);
+        webcamSenderThread.start();
     }
 
     public String getClientId() {
