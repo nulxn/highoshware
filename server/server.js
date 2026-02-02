@@ -9,62 +9,91 @@ const server = http.createServer(app);
 // Serve static files from public directory
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Store active streams: clientId -> { screen: WebSocket, webcam: WebSocket }
+// Store active streams: clientId -> { screen: true|false, webcam: true|false } (presence only; frames come via HTTP)
 const activeStreams = new Map();
 
-// WebSocket server for receiving streams from clients
-// perMessageDeflate: false — Java client doesn't support compression (RSV1); avoids InvalidFrameException
-const wss = new WebSocket.Server({ 
-    server,
-    path: '/stream',
-    perMessageDeflate: false
-});
-
-wss.on('connection', (ws, req) => {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const streamType = url.searchParams.get('type'); // 'screen' or 'webcam'
-    const clientId = url.searchParams.get('clientId');
-
-    if (!streamType || !clientId) {
-        ws.close(1008, 'Missing type or clientId parameter');
+// HTTP POST endpoints for stream sources (avoids WebSocket control-frame issues with Java/OkHttp)
+// Body: repeated [4-byte big-endian length][length bytes JPEG]. No body parser — read raw stream.
+app.post('/stream/screen', (req, res) => {
+    const clientId = req.query.clientId;
+    if (!clientId) {
+        res.status(400).send('Missing clientId');
         return;
     }
-
-    console.log(`Client ${clientId} connected with ${streamType} stream`);
-
-    // Initialize client entry if not exists
-    if (!activeStreams.has(clientId)) {
-        activeStreams.set(clientId, { screen: null, webcam: null });
-    }
-
-    const clientStreams = activeStreams.get(clientId);
-    clientStreams[streamType] = ws;
-
-    // Broadcast to all viewing clients that a new stream is available
-    broadcastStreamUpdate();
-
-    ws.on('message', (data) => {
-        // Forward frame to all viewing clients
-        broadcastFrame(clientId, streamType, data);
-    });
-
-    ws.on('close', () => {
-        console.log(`Client ${clientId} disconnected ${streamType} stream`);
-        const clientStreams = activeStreams.get(clientId);
-        if (clientStreams) {
-            clientStreams[streamType] = null;
-            // Remove client if both streams are closed
-            if (!clientStreams.screen && !clientStreams.webcam) {
-                activeStreams.delete(clientId);
-            }
-        }
-        broadcastStreamUpdate();
-    });
-
-    ws.on('error', (error) => {
-        console.error(`WebSocket error for client ${clientId} ${streamType}:`, error);
-    });
+    registerStream(clientId, 'screen');
+    req.on('data', (chunk) => { feedChunk(clientId, 'screen', chunk); });
+    req.on('end', () => { unregisterStream(clientId, 'screen'); });
+    req.on('error', () => { unregisterStream(clientId, 'screen'); });
+    res.status(200).end();
 });
+
+app.post('/stream/webcam', (req, res) => {
+    const clientId = req.query.clientId;
+    if (!clientId) {
+        res.status(400).send('Missing clientId');
+        return;
+    }
+    registerStream(clientId, 'webcam');
+    req.on('data', (chunk) => { feedChunk(clientId, 'webcam', chunk); });
+    req.on('end', () => { unregisterStream(clientId, 'webcam'); });
+    req.on('error', () => { unregisterStream(clientId, 'webcam'); });
+    res.status(200).end();
+});
+
+// Per-connection buffers for length-prefixed frame parsing
+const streamBuffers = new Map();
+
+function bufferKey(clientId, streamType) {
+    return `${clientId}:${streamType}`;
+}
+
+function registerStream(clientId, streamType) {
+    if (!activeStreams.has(clientId)) {
+        activeStreams.set(clientId, { screen: false, webcam: false });
+    }
+    activeStreams.get(clientId)[streamType] = true;
+    streamBuffers.set(bufferKey(clientId, streamType), { buf: Buffer.alloc(0), need: 4, payloadLen: 0 });
+    broadcastStreamUpdate();
+    console.log(`Client ${clientId} connected with ${streamType} stream (HTTP)`);
+}
+
+function feedChunk(clientId, streamType, chunk) {
+    const key = bufferKey(clientId, streamType);
+    let state = streamBuffers.get(key);
+    if (!state) return;
+    state.buf = Buffer.concat([state.buf, chunk]);
+    while (true) {
+        if (state.need === 4 && state.buf.length >= 4) {
+            const len = state.buf.readUInt32BE(0);
+            state.buf = state.buf.subarray(4);
+            if (len > 10 * 1024 * 1024) { state.need = 4; state.payloadLen = 0; break; }
+            state.payloadLen = len;
+            state.need = len;
+        }
+        if (state.need > 0 && state.buf.length >= state.need) {
+            const frame = state.buf.subarray(0, state.need);
+            state.buf = state.buf.subarray(state.need);
+            broadcastFrame(clientId, streamType, frame);
+            state.need = 4;
+            state.payloadLen = 0;
+            continue;
+        }
+        break;
+    }
+}
+
+function unregisterStream(clientId, streamType) {
+    streamBuffers.delete(bufferKey(clientId, streamType));
+    const clientStreams = activeStreams.get(clientId);
+    if (clientStreams) {
+        clientStreams[streamType] = false;
+        if (!clientStreams.screen && !clientStreams.webcam) {
+            activeStreams.delete(clientId);
+        }
+    }
+    broadcastStreamUpdate();
+    console.log(`Client ${clientId} disconnected ${streamType} stream`);
+}
 
 // WebSocket server for viewing clients (browsers)
 const viewWss = new WebSocket.Server({ 
@@ -93,11 +122,12 @@ viewWss.on('connection', (ws) => {
 });
 
 function broadcastFrame(clientId, streamType, frameData) {
+    const data = Buffer.isBuffer(frameData) ? frameData.toString('base64') : frameData.toString('base64');
     const message = JSON.stringify({
         type: 'frame',
         clientId,
         streamType,
-        data: frameData.toString('base64')
+        data
     });
 
     viewingClients.forEach((client) => {
@@ -114,8 +144,8 @@ function broadcastFrame(clientId, streamType, frameData) {
 function broadcastStreamUpdate() {
     const streamList = Array.from(activeStreams.entries()).map(([clientId, streams]) => ({
         clientId,
-        hasScreen: streams.screen !== null,
-        hasWebcam: streams.webcam !== null
+        hasScreen: streams.screen === true,
+        hasWebcam: streams.webcam === true
     }));
 
     const message = JSON.stringify({
@@ -137,8 +167,8 @@ function broadcastStreamUpdate() {
 function sendStreamList(ws) {
     const streamList = Array.from(activeStreams.entries()).map(([clientId, streams]) => ({
         clientId,
-        hasScreen: streams.screen !== null,
-        hasWebcam: streams.webcam !== null
+        hasScreen: streams.screen === true,
+        hasWebcam: streams.webcam === true
     }));
 
     const message = JSON.stringify({

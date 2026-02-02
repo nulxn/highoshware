@@ -115,8 +115,8 @@ npm install
 ## URLs
 
 - **Server Web Interface**: `http://localhost:3000/`
-- **WebSocket Stream Endpoint**: `ws://localhost:3000/stream`
-- **WebSocket View Endpoint**: `ws://localhost:3000/view`
+- **Stream source (client → server)**: HTTP POST `http://localhost:3000/stream/screen` and `/stream/webcam` (chunked, length-prefixed frames)
+- **WebSocket View Endpoint**: `ws://localhost:3000/view` (browsers receive stream updates)
 
 ## Development
 

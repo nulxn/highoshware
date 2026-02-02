@@ -1,46 +1,46 @@
 package com.granolaa.app;
 
+import okhttp3.Call;
+import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
-import okhttp3.Response;
-import okhttp3.WebSocket;
-import okhttp3.WebSocketListener;
-import okio.ByteString;
+import okhttp3.RequestBody;
+import okio.BufferedSink;
 
 import java.io.IOException;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 /**
- * WebSocket client that sends screen and webcam frames to a remote server.
- * Uses OkHttp WebSocket (no permessage-deflate) to avoid RSV1/compression errors.
- * Each stream is identified by a unique client ID and stream type.
+ * HTTP client that sends screen and webcam frames to the server via chunked POST.
+ * Uses length-prefixed frames (4-byte big-endian length + JPEG bytes) to avoid
+ * WebSocket control-frame issues (RSV1, "Control frames must be final").
  */
 public class StreamClient {
 
-    private final String serverUrl;
+    private final String httpBaseUrl;
     private final String clientId;
     private final ScreenCapture screenCapture;
     private final WebcamCapture webcamCapture;
     private final OkHttpClient okHttpClient;
 
-    private final AtomicReference<WebSocket> screenWebSocket = new AtomicReference<>();
-    private final AtomicReference<WebSocket> webcamWebSocket = new AtomicReference<>();
-    private volatile boolean screenConnected;
-    private volatile boolean webcamConnected;
+    private final AtomicReference<Call> screenCall = new AtomicReference<>();
+    private final AtomicReference<Call> webcamCall = new AtomicReference<>();
     private Thread screenSenderThread;
     private Thread webcamSenderThread;
+    private volatile boolean running = true;
 
     public StreamClient(String serverUrl, ScreenCapture screenCapture, WebcamCapture webcamCapture) {
-        this.serverUrl = serverUrl;
         this.clientId = UUID.randomUUID().toString();
         this.screenCapture = screenCapture;
         this.webcamCapture = webcamCapture;
+        this.httpBaseUrl = serverUrl.replaceFirst("^ws", "http");
         this.okHttpClient = new OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(0, TimeUnit.MILLISECONDS)
-                .writeTimeout(30, TimeUnit.SECONDS)
-                .pingInterval(30, TimeUnit.SECONDS)
+                .writeTimeout(0, TimeUnit.MILLISECONDS)
                 .build();
     }
 
@@ -52,77 +52,34 @@ public class StreamClient {
     }
 
     public void stop() {
-        if (screenSenderThread != null) {
-            screenSenderThread.interrupt();
-        }
-        if (webcamSenderThread != null) {
-            webcamSenderThread.interrupt();
-        }
-        WebSocket sw = screenWebSocket.getAndSet(null);
-        if (sw != null) {
-            sw.close(1000, "Client shutdown");
-        }
-        WebSocket ww = webcamWebSocket.getAndSet(null);
-        if (ww != null) {
-            ww.close(1000, "Client shutdown");
-        }
+        running = false;
+        Call sc = screenCall.getAndSet(null);
+        if (sc != null) sc.cancel();
+        Call wc = webcamCall.getAndSet(null);
+        if (wc != null) wc.cancel();
+        if (screenSenderThread != null) screenSenderThread.interrupt();
+        if (webcamSenderThread != null) webcamSenderThread.interrupt();
     }
 
     private void startScreenStream() {
-        String url = serverUrl + "/stream?type=screen&clientId=" + clientId;
-        Request request = new Request.Builder().url(url).build();
-        okHttpClient.newWebSocket(request, new WebSocketListener() {
-            @Override
-            public void onOpen(WebSocket webSocket, Response response) {
-                screenWebSocket.set(webSocket);
-                screenConnected = true;
-                System.out.println("Screen stream connected to server");
-            }
-
-            @Override
-            public void onMessage(WebSocket webSocket, String text) { }
-
-            @Override
-            public void onMessage(WebSocket webSocket, ByteString bytes) { }
-
-            @Override
-            public void onClosing(WebSocket webSocket, int code, String reason) {
-                screenConnected = false;
-                screenWebSocket.set(null);
-            }
-
-            @Override
-            public void onClosed(WebSocket webSocket, int code, String reason) {
-                screenConnected = false;
-                screenWebSocket.set(null);
-                System.out.println("Screen stream disconnected: " + reason);
-            }
-
-            @Override
-            public void onFailure(WebSocket webSocket, Throwable t, Response response) {
-                screenConnected = false;
-                screenWebSocket.set(null);
-                System.err.println("Screen stream error: " + (t != null ? t.getMessage() : "unknown"));
-            }
-        });
-
+        Request request = new Request.Builder()
+                .url(httpBaseUrl + "/stream/screen?clientId=" + clientId)
+                .post(new ChunkedFrameBody(screenCapture::getLatestFrame, "screen"))
+                .build();
         screenSenderThread = new Thread(() -> {
-            while (!Thread.currentThread().isInterrupted()) {
-                try {
-                    WebSocket ws = screenWebSocket.get();
-                    if (screenConnected && ws != null) {
-                        byte[] frame = screenCapture.getLatestFrame();
-                        if (frame != null && frame.length > 0) {
-                            ws.send(ByteString.of(frame));
-                        }
+            try {
+                Call call = okHttpClient.newCall(request);
+                screenCall.set(call);
+                System.out.println("Screen stream connecting...");
+                try (var response = call.execute()) {
+                    if (response.isSuccessful()) {
+                        System.out.println("Screen stream ended normally");
                     }
-                    Thread.sleep(100); // ~10 FPS
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                } catch (Exception e) {
-                    System.err.println("Error sending screen frame: " + e.getMessage());
                 }
+            } catch (IOException e) {
+                if (running) System.err.println("Screen stream error: " + e.getMessage());
+            } finally {
+                screenCall.set(null);
             }
         }, "screen-sender");
         screenSenderThread.setDaemon(true);
@@ -130,60 +87,24 @@ public class StreamClient {
     }
 
     private void startWebcamStream() {
-        String url = serverUrl + "/stream?type=webcam&clientId=" + clientId;
-        Request request = new Request.Builder().url(url).build();
-        okHttpClient.newWebSocket(request, new WebSocketListener() {
-            @Override
-            public void onOpen(WebSocket webSocket, Response response) {
-                webcamWebSocket.set(webSocket);
-                webcamConnected = true;
-                System.out.println("Webcam stream connected to server");
-            }
-
-            @Override
-            public void onMessage(WebSocket webSocket, String text) { }
-
-            @Override
-            public void onMessage(WebSocket webSocket, ByteString bytes) { }
-
-            @Override
-            public void onClosing(WebSocket webSocket, int code, String reason) {
-                webcamConnected = false;
-                webcamWebSocket.set(null);
-            }
-
-            @Override
-            public void onClosed(WebSocket webSocket, int code, String reason) {
-                webcamConnected = false;
-                webcamWebSocket.set(null);
-                System.out.println("Webcam stream disconnected: " + reason);
-            }
-
-            @Override
-            public void onFailure(WebSocket webSocket, Throwable t, Response response) {
-                webcamConnected = false;
-                webcamWebSocket.set(null);
-                System.err.println("Webcam stream error: " + (t != null ? t.getMessage() : "unknown"));
-            }
-        });
-
+        Request request = new Request.Builder()
+                .url(httpBaseUrl + "/stream/webcam?clientId=" + clientId)
+                .post(new ChunkedFrameBody(webcamCapture::getLatestFrame, "webcam"))
+                .build();
         webcamSenderThread = new Thread(() -> {
-            while (!Thread.currentThread().isInterrupted()) {
-                try {
-                    WebSocket ws = webcamWebSocket.get();
-                    if (webcamConnected && ws != null) {
-                        byte[] frame = webcamCapture.getLatestFrame();
-                        if (frame != null && frame.length > 0) {
-                            ws.send(ByteString.of(frame));
-                        }
+            try {
+                Call call = okHttpClient.newCall(request);
+                webcamCall.set(call);
+                System.out.println("Webcam stream connecting...");
+                try (var response = call.execute()) {
+                    if (response.isSuccessful()) {
+                        System.out.println("Webcam stream ended normally");
                     }
-                    Thread.sleep(100); // ~10 FPS
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                } catch (Exception e) {
-                    System.err.println("Error sending webcam frame: " + e.getMessage());
                 }
+            } catch (IOException e) {
+                if (running) System.err.println("Webcam stream error: " + e.getMessage());
+            } finally {
+                webcamCall.set(null);
             }
         }, "webcam-sender");
         webcamSenderThread.setDaemon(true);
@@ -192,5 +113,38 @@ public class StreamClient {
 
     public String getClientId() {
         return clientId;
+    }
+
+    private class ChunkedFrameBody extends RequestBody {
+        private final Supplier<byte[]> frameSupplier;
+        private final String name;
+
+        ChunkedFrameBody(Supplier<byte[]> frameSupplier, String name) {
+            this.frameSupplier = frameSupplier;
+            this.name = name;
+        }
+
+        @Override
+        public MediaType contentType() {
+            return MediaType.get("application/octet-stream");
+        }
+
+        @Override
+        public void writeTo(BufferedSink sink) throws IOException {
+            while (running && !Thread.currentThread().isInterrupted()) {
+                byte[] frame = frameSupplier.get();
+                if (frame != null && frame.length > 0) {
+                    sink.writeInt(frame.length);
+                    sink.write(frame);
+                    sink.flush();
+                }
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
     }
 }
