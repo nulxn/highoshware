@@ -1,0 +1,17 @@
+{
+  "name": "granolaa-server",
+  "version": "1.0.0",
+  "description": "Server for receiving and displaying multiple Granolaa streams",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": ["streaming", "websocket", "mjpeg"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.14.2"
+  }
+}

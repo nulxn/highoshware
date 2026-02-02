@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Granolaa - Stream Viewer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Granolaa Stream Viewer</h1>
+            <div class="status" id="status">Connecting...</div>
+        </header>
+        
+        <div class="controls">
+            <button id="refreshBtn" onclick="refreshStreams()">Refresh Streams</button>
+            <div class="stream-count">Active Streams: <span id="streamCount">0</span></div>
+        </div>
+
+        <div id="streamsContainer" class="streams-container">
+            <div class="no-streams" id="noStreams">
+                <p>No active streams. Waiting for clients to connect...</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
