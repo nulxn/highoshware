@@ -7,13 +7,13 @@ A distributed streaming system for screen and webcam capture. The system consist
 ## Architecture
 
 ```
-┌─────────────────┐         WebSocket          ┌──────────────┐
+┌─────────────────┐         WebSocket           ┌──────────────┐
 │  Client (Java)  │ ──────────────────────────> │   Server     │
 │  - Screen       │                             │  (Node.js)   │
 │  - Webcam       │                             │              │
 └─────────────────┘                             │  ┌────────┐  │
                                                 │  │  Web   │  │
-┌─────────────────┐         WebSocket          │  │ Viewer │  │
+┌─────────────────┐         WebSocket           │  │ Viewer │  │
 │  Client (Java)  │ ──────────────────────────> │  └────────┘  │
 │  - Screen       │                             └──────────────┘
 │  - Webcam       │                                      │
