@@ -23,9 +23,9 @@ PORT=8080 npm start
 ## Endpoints
 
 - `GET /` - Web interface for viewing streams
-- `WS /stream` - WebSocket endpoint for clients to send streams
-  - Query parameters: `type` (screen|webcam), `clientId` (unique client identifier)
-- `WS /view` - WebSocket endpoint for browsers to receive stream updates
+- `POST /stream/screen` - HTTP (chunked) for **senders** (Java app) to push screen frames. Query: `clientId`
+- `POST /stream/webcam` - HTTP (chunked) for **senders** (Java app) to push webcam frames. Query: `clientId`
+- `WS /view` - WebSocket for **viewers** (browser) to receive stream list and live frames
 
 ## Architecture
 

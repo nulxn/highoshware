@@ -6,24 +6,25 @@ A distributed streaming system for screen and webcam capture. The system consist
 
 ## Architecture
 
+- **Person sending (distribution client)**: The Java app sends screen and webcam frames to the server using **HTTP POST** (chunked) to `/stream/screen` and `/stream/webcam`. It does **not** use WebSocket.
+- **Person watching**: A viewer opens the server URL in a **browser**. The browser connects to the server using **WebSocket** (`/view`) to receive the list of streams and live frames.
+
 ```
-┌─────────────────┐         WebSocket           ┌──────────────┐
-│  Client (Java)  │ ──────────────────────────> │   Server     │
-│  - Screen       │                             │  (Node.js)   │
-│  - Webcam       │                             │              │
+┌─────────────────┐      HTTP POST (chunked)    ┌──────────────┐
+│  Client (Java)  │  /stream/screen, /stream/   │   Server     │
+│  - Screen       │  webcam                     │  (Node.js)   │
+│  - Webcam       │ ─────────────────────────> │              │
 └─────────────────┘                             │  ┌────────┐  │
-                                                │  │  Web   │  │
-┌─────────────────┐         WebSocket           │  │ Viewer │  │
-│  Client (Java)  │ ──────────────────────────> │  └────────┘  │
-│  - Screen       │                             └──────────────┘
-│  - Webcam       │                                      │
-└─────────────────┘                                      │
-                                                         │ HTTP/WebSocket
-                                                         ▼
-                                                ┌──────────────┐
-                                                │   Browser    │
-                                                │   Viewer     │
-                                                └──────────────┘
+                                               │  │ Viewer│  │
+                                               │  │ (WS)  │  │
+                                               │  └───┬───┘  │
+                                               └──────│──────┘
+                                                      │ WebSocket /view
+                                                      ▼
+                                               ┌──────────────┐
+                                               │   Browser    │
+                                               │   (viewer)   │
+                                               └──────────────┘
 ```
 
 ## Quick Start
