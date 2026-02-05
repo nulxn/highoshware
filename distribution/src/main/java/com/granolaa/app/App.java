@@ -4,7 +4,7 @@ import java.util.Scanner;
 
 public class App {
 
-    private static final String DEFAULT_SERVER_URL = "http://granolaa.opencodingsociety.com";
+    private static final String DEFAULT_SERVER_URL = "https://granolaa.opencodingsociety.com";
 
     public static void main(String[] args) {
         String serverUrl = System.getProperty("server.url",

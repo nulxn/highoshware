@@ -1,4 +1,4 @@
-const WS_URL = `ws://${window.location.host}/view`;
+const WS_URL = `wss://${window.location.host}/view`;
 let ws = null;
 let streams = new Map(); // clientId -> { screen: ImageData, webcam: ImageData }
 let reconnectTimeout = null;
